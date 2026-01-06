@@ -91,6 +91,12 @@ fn get_commands() -> Vec<CommandSpec> {
             arg_usage: "",
             handler: exit_command,
         },
+        CommandSpec {
+            name: "type",
+            arg_policy: ArgPolicy::Exact(1),
+            arg_usage: "<command>",
+            handler: type_command,
+        }
     ]
 }
 
@@ -101,4 +107,19 @@ fn echo_command(args: &[&str]) -> Result<(), String> {
 
 fn exit_command(_args: &[&str]) -> Result<(), String> {
     std::process::exit(0);
+}
+
+fn type_command(args: &[&str]) -> Result<(), String> {
+    let command_name = args[0];
+    let commands = get_commands();
+    match commands.iter().find(|cmd| cmd.name == command_name) {
+        Some(cmd) => {
+            println!("{} is a shell builtin", cmd.name);
+            Ok(())
+        }
+        None => {
+            println!("{}: not found", command_name);
+            Ok(())
+        }
+    }
 }
