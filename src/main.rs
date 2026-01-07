@@ -150,6 +150,9 @@ fn process_quotes(input: &str) -> Vec<String> {
                 }
             }
             '\'' => {
+                if backslash && double_quotes {
+                    current_part.push('\\');
+                } 
                 if backslash {
                     current_part.push(c);
                     backslash = false;
@@ -163,7 +166,7 @@ fn process_quotes(input: &str) -> Vec<String> {
                 if backslash {
                     current_part.push(c);
                     backslash = false;
-                } else if double_quotes || single_quotes {
+                } else if single_quotes {
                     current_part.push(c);
                 } else {
                     backslash = true;
@@ -179,6 +182,9 @@ fn process_quotes(input: &str) -> Vec<String> {
                 }
             }
             _ => {
+                if backslash && double_quotes {
+                    current_part.push('\\');
+                }
                 if backslash {
                     backslash = false;
                 }
