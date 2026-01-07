@@ -31,6 +31,7 @@ struct Shell {
     path_lookup: HashMap<String, String>,
     history: RefCell<Vec<String>>,
     history_saved: Cell<usize>,
+    histfile: Option<String>,
 }
 
 fn main() {
@@ -53,6 +54,7 @@ fn main() {
             }
         }
     }
+    save_history_to_histfile(&shell);
 }
 
 fn repl(shell: &mut Shell, rl: &mut Editor<ShellHelper, DefaultHistory>) -> io::Result<bool> {
@@ -171,12 +173,16 @@ impl Shell {
             },
         );
         let path_lookup: HashMap<String, String> = load_path_commands();
-        Self {
+        let histfile = env::var("HISTFILE").ok();
+        let shell = Self {
             builtins,
             path_lookup,
             history: RefCell::new(Vec::new()),
             history_saved: Cell::new(0),
-        }
+            histfile,
+        };
+        load_history_from_histfile(&shell);
+        shell
     }
 
     fn find_builtin(&self, name: &str) -> Option<&CommandSpec> {
@@ -750,6 +756,7 @@ fn echo_command(_shell: &Shell, args: Vec<String>) -> Result<String, String> {
 }
 
 fn exit_command(_shell: &Shell, _args: Vec<String>) -> Result<String, String> {
+    save_history_to_histfile(_shell);
     std::process::exit(0);
 }
 
@@ -946,4 +953,32 @@ fn history_command(shell: &Shell, args: Vec<String>) -> Result<String, String> {
         out.pop();
     }
     Ok(out)
+}
+
+fn load_history_from_histfile(shell: &Shell) {
+    let Some(path) = shell.histfile.as_ref() else {
+        return;
+    };
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(_) => return,
+    };
+    let mut history = shell.history.borrow_mut();
+    for line in contents.lines() {
+        if !line.is_empty() {
+            history.push(line.to_string());
+        }
+    }
+    shell.history_saved.set(history.len());
+}
+
+fn save_history_to_histfile(shell: &Shell) {
+    let Some(path) = shell.histfile.as_ref() else {
+        return;
+    };
+    let history = shell.history.borrow();
+    let mut contents = history.join("\n");
+    contents.push('\n');
+    let _ = std::fs::write(path, contents);
+    shell.history_saved.set(history.len());
 }
