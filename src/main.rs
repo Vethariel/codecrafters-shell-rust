@@ -26,6 +26,7 @@ struct CommandSpec {
 struct Shell {
     builtins: HashMap<&'static str, CommandSpec>,
     path_lookup: HashMap<String, String>,
+    history: Vec<String>,
 }
 
 fn main() {
@@ -54,6 +55,7 @@ fn repl(shell: &mut Shell, rl: &mut Editor<ShellHelper, DefaultHistory>) -> io::
     match rl.readline("$ ") {
         Ok(line) => {
             if !line.trim().is_empty() {
+                shell.history.push(line.to_string());
                 let _ = rl.add_history_entry(line.as_str());
             }
             process_command(shell, line.trim());
@@ -157,10 +159,18 @@ impl Shell {
                 handler: cd_command,
             },
         );
+        builtins.insert(
+            "history",
+            CommandSpec {
+                arg_policy: ArgPolicy::None,
+                handler: history_command,
+            },
+        );
         let path_lookup: HashMap<String, String> = load_path_commands();
         Self {
             builtins,
             path_lookup,
+            history: Vec::new(),
         }
     }
 
@@ -853,4 +863,15 @@ fn cd_command(_shell: &Shell, args: Vec<String>) -> Result<String, String> {
         Ok(_) => Ok(String::new()),
         Err(e) => Err(format!("cd: {}: {}", &target_dir, e)),
     }
+}
+
+fn history_command(shell: &Shell, _args: Vec<String>) -> Result<String, String> {
+    let mut out = String::new();
+    for (idx, entry) in shell.history.iter().enumerate() {
+        out.push_str(&format!("{} {}\n", idx + 1, entry));
+    }
+    if out.ends_with('\n') {
+        out.pop();
+    }
+    Ok(out)
 }
