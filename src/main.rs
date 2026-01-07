@@ -179,14 +179,14 @@ fn process_command(shell: &mut Shell, input: &str) {
         return;
     }
     if let Some(pipe_index) = parts.iter().position(|part| part == "|") {
-        let mut left_parts: Vec<String> = parts.drain(..pipe_index).collect();
+        let left_parts: Vec<String> = parts.drain(..pipe_index).collect();
         parts.pop_front();
         let right_parts: Vec<String> = parts.into_iter().collect();
         if left_parts.is_empty() || right_parts.is_empty() {
             eprintln!("Invalid pipeline");
             return;
         }
-        run_pipeline(shell, &mut left_parts, &right_parts);
+        run_pipeline(shell, &left_parts, &right_parts);
         return;
     }
     let command_name: String = parts.pop_front().unwrap();
@@ -217,54 +217,141 @@ fn process_command(shell: &mut Shell, input: &str) {
     eprintln!("{}: command not found", command_name);
 }
 
-fn run_pipeline(shell: &Shell, left_parts: &mut Vec<String>, right_parts: &[String]) {
-    let left_command = left_parts.remove(0);
-    let right_command = &right_parts[0];
-    if shell.external_path(&left_command).is_none() {
-        eprintln!("{}: command not found", left_command);
+fn run_pipeline(shell: &Shell, left_parts: &[String], right_parts: &[String]) {
+    let (left_name, left_args) = match left_parts.split_first() {
+        Some((name, rest)) => (name.as_str(), rest),
+        None => return,
+    };
+    let (right_name, right_args) = match right_parts.split_first() {
+        Some((name, rest)) => (name.as_str(), rest),
+        None => return,
+    };
+
+    let left_is_builtin = shell.find_builtin(left_name).is_some();
+    let right_is_builtin = shell.find_builtin(right_name).is_some();
+    let left_is_external = shell.external_path(left_name).is_some();
+    let right_is_external = shell.external_path(right_name).is_some();
+
+    if !left_is_builtin && !left_is_external {
+        eprintln!("{}: command not found", left_name);
         return;
     }
-    if shell.external_path(right_command).is_none() {
-        eprintln!("{}: command not found", right_command);
+    if !right_is_builtin && !right_is_external {
+        eprintln!("{}: command not found", right_name);
         return;
     }
-    let mut left_proc = match std::process::Command::new(&left_command)
-        .args(left_parts)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-    {
-        Ok(proc) => proc,
-        Err(err) => {
-            eprintln!("Error: Failed to execute program: {}", err);
-            return;
+
+    if right_is_external {
+        if left_is_external {
+            let mut left_proc = match std::process::Command::new(left_name)
+                .args(left_args)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()
+            {
+                Ok(proc) => proc,
+                Err(err) => {
+                    eprintln!("Error: Failed to execute program: {}", err);
+                    return;
+                }
+            };
+            let left_stdout = match left_proc.stdout.take() {
+                Some(stdout) => stdout,
+                None => {
+                    eprintln!("Error: Failed to capture stdout for pipeline");
+                    return;
+                }
+            };
+            let mut right_proc = match std::process::Command::new(right_name)
+                .args(right_args)
+                .stdin(Stdio::from(left_stdout))
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .spawn()
+            {
+                Ok(proc) => proc,
+                Err(err) => {
+                    eprintln!("Error: Failed to execute program: {}", err);
+                    return;
+                }
+            };
+            if let Err(err) = right_proc.wait() {
+                eprintln!("Error: {}", err);
+            }
+            let _ = left_proc.kill();
+            let _ = left_proc.wait();
+        } else if let Some(result) = run_builtin(shell, left_name, left_args) {
+            let output = match result {
+                Ok(output) => output,
+                Err(err) => {
+                    eprintln!("{}", err);
+                    return;
+                }
+            };
+            let mut right_proc = match std::process::Command::new(right_name)
+                .args(right_args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .spawn()
+            {
+                Ok(proc) => proc,
+                Err(err) => {
+                    eprintln!("Error: Failed to execute program: {}", err);
+                    return;
+                }
+            };
+            if let Some(mut stdin) = right_proc.stdin.take() {
+                write_with_trailing_newline(&mut stdin, &output);
+            }
+            if let Err(err) = right_proc.wait() {
+                eprintln!("Error: {}", err);
+            }
         }
-    };
-    let left_stdout = match left_proc.stdout.take() {
-        Some(stdout) => stdout,
-        None => {
-            eprintln!("Error: Failed to capture stdout for pipeline");
-            return;
-        }
-    };
-    let mut right_proc = match std::process::Command::new(right_command)
-        .args(&right_parts[1..])
-        .stdin(Stdio::from(left_stdout))
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()
-    {
-        Ok(proc) => proc,
-        Err(err) => {
-            eprintln!("Error: Failed to execute program: {}", err);
-            return;
-        }
-    };
-    if let Err(err) = right_proc.wait() {
-        eprintln!("Error: {}", err);
+        return;
     }
-    let _ = left_proc.kill();
-    let _ = left_proc.wait();
+
+    let mut left_proc = if left_is_external {
+        match std::process::Command::new(left_name)
+            .args(left_args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+        {
+            Ok(proc) => Some(proc),
+            Err(err) => {
+                eprintln!("Error: Failed to execute program: {}", err);
+                return;
+            }
+        }
+    } else {
+        if let Some(result) = run_builtin(shell, left_name, left_args) {
+            if let Err(err) = result {
+                eprintln!("{}", err);
+            }
+        }
+        None
+    };
+
+    if let Some(result) = run_builtin(shell, right_name, right_args) {
+        handle_redirection(result, &None, &String::new());
+    }
+
+    if let Some(proc) = left_proc.as_mut() {
+        let _ = proc.kill();
+        let _ = proc.wait();
+    }
+}
+
+fn run_builtin(shell: &Shell, name: &str, args: &[String]) -> Option<Result<String, String>> {
+    let cmd = shell.find_builtin(name)?;
+    match validate_args(&cmd.arg_policy, args) {
+        Ok(_) => Some((cmd.handler)(shell, args.to_vec())),
+        Err(err) => {
+            eprintln!("Argument Error: {}", err);
+            None
+        }
+    }
 }
 
 fn process_quotes(input: &str) -> VecDeque<String> {
