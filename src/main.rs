@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::env;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::process::Stdio;
 use rustyline::completion::{Completer, FilenameCompleter, Pair};
@@ -178,15 +178,15 @@ fn process_command(shell: &mut Shell, input: &str) {
     if parts.is_empty() {
         return;
     }
-    if let Some(pipe_index) = parts.iter().position(|part| part == "|") {
-        let left_parts: Vec<String> = parts.drain(..pipe_index).collect();
-        parts.pop_front();
-        let right_parts: Vec<String> = parts.into_iter().collect();
-        if left_parts.is_empty() || right_parts.is_empty() {
+    if parts.iter().any(|part| part == "|") {
+        let segments = split_pipeline(parts);
+        if segments.len() == 2 {
+            run_pipeline(shell, &segments[0], &segments[1]);
+        } else if segments.len() > 2 {
+            run_pipeline_chain(shell, &segments);
+        } else {
             eprintln!("Invalid pipeline");
-            return;
         }
-        run_pipeline(shell, &left_parts, &right_parts);
         return;
     }
     let command_name: String = parts.pop_front().unwrap();
@@ -343,6 +343,74 @@ fn run_pipeline(shell: &Shell, left_parts: &[String], right_parts: &[String]) {
     }
 }
 
+fn run_pipeline_chain(shell: &Shell, segments: &[Vec<String>]) {
+    if segments.iter().any(|seg| seg.is_empty()) {
+        eprintln!("Invalid pipeline");
+        return;
+    }
+    for seg in segments {
+        let name = &seg[0];
+        if shell.find_builtin(name).is_none() && shell.external_path(name).is_none() {
+            eprintln!("{}: command not found", name);
+            return;
+        }
+    }
+
+    let mut buffer: Vec<u8> = Vec::new();
+    for seg in segments {
+        let (name, args) = match seg.split_first() {
+            Some((name, rest)) => (name.as_str(), rest),
+            None => return,
+        };
+        if shell.find_builtin(name).is_some() {
+            let result = match run_builtin(shell, name, args) {
+                Some(result) => result,
+                None => return,
+            };
+            match result {
+                Ok(output) => {
+                    buffer = output.into_bytes();
+                    if !buffer.is_empty() && !buffer.ends_with(b"\n") {
+                        buffer.push(b'\n');
+                    }
+                }
+                Err(err) => {
+                    eprintln!("{}", err);
+                    return;
+                }
+            }
+        } else {
+            match run_external_with_input(name, args, &buffer) {
+                Ok(output) => buffer = output,
+                Err(err) => {
+                    eprintln!("Error: {}", err);
+                    return;
+                }
+            }
+        }
+    }
+
+    if !buffer.is_empty() {
+        let _ = io::stdout().write_all(&buffer);
+        let _ = io::stdout().flush();
+    }
+}
+
+fn split_pipeline(mut parts: VecDeque<String>) -> Vec<Vec<String>> {
+    let mut segments: Vec<Vec<String>> = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+    while let Some(part) = parts.pop_front() {
+        if part == "|" {
+            segments.push(current);
+            current = Vec::new();
+        } else {
+            current.push(part);
+        }
+    }
+    segments.push(current);
+    segments
+}
+
 fn run_builtin(shell: &Shell, name: &str, args: &[String]) -> Option<Result<String, String>> {
     let cmd = shell.find_builtin(name)?;
     match validate_args(&cmd.arg_policy, args) {
@@ -352,6 +420,41 @@ fn run_builtin(shell: &Shell, name: &str, args: &[String]) -> Option<Result<Stri
             None
         }
     }
+}
+
+fn run_external_with_input(
+    name: &str,
+    args: &[String],
+    input: &[u8],
+) -> Result<Vec<u8>, String> {
+    let mut child = std::process::Command::new(name)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| format!("Failed to execute program: {}", e))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        if !input.is_empty() {
+            stdin
+                .write_all(input)
+                .map_err(|e| format!("Failed to write to stdin: {}", e))?;
+        }
+    }
+
+    let mut stdout = Vec::new();
+    if let Some(mut out) = child.stdout.take() {
+        out.read_to_end(&mut stdout)
+            .map_err(|e| format!("Failed to read stdout: {}", e))?;
+    }
+    let status = child
+        .wait()
+        .map_err(|e| format!("Failed to wait for process: {}", e))?;
+    if !status.success() {
+        eprintln!("Program exited with status: {}", status);
+    }
+    Ok(stdout)
 }
 
 fn process_quotes(input: &str) -> VecDeque<String> {
