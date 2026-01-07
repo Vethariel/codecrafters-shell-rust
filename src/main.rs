@@ -15,6 +15,7 @@ use rustyline::{Context, Editor, Helper};
 enum ArgPolicy {
     None,
     Exact(usize),
+    OptionalOne,
     AtLeast(usize),
 }
 
@@ -162,7 +163,7 @@ impl Shell {
         builtins.insert(
             "history",
             CommandSpec {
-                arg_policy: ArgPolicy::None,
+                arg_policy: ArgPolicy::OptionalOne,
                 handler: history_command,
             },
         );
@@ -595,6 +596,13 @@ fn validate_args(policy: &ArgPolicy, args: &[String]) -> Result<(), String> {
                 Ok(())
             }
         }
+        ArgPolicy::OptionalOne => {
+            if args.len() > 1 {
+                Err("This command takes at most one argument.".to_string())
+            } else {
+                Ok(())
+            }
+        }
         ArgPolicy::AtLeast(n) => {
             if args.len() < *n {
                 Err(format!("This command requires at least {} argument(s).", n))
@@ -865,10 +873,22 @@ fn cd_command(_shell: &Shell, args: Vec<String>) -> Result<String, String> {
     }
 }
 
-fn history_command(shell: &Shell, _args: Vec<String>) -> Result<String, String> {
+fn history_command(shell: &Shell, args: Vec<String>) -> Result<String, String> {
     let mut out = String::new();
-    for (idx, entry) in shell.history.iter().enumerate() {
-        out.push_str(&format!("{} {}\n", idx + 1, entry));
+    let limit = if args.is_empty() {
+        shell.history.len()
+    } else {
+        let raw = &args[0];
+        match raw.parse::<usize>() {
+            Ok(n) => n,
+            Err(_) => return Err(format!("history: {}: numeric argument required", raw)),
+        }
+    };
+    let total = shell.history.len();
+    let start = total.saturating_sub(limit);
+    for (offset, entry) in shell.history.iter().skip(start).enumerate() {
+        let idx = start + offset + 1;
+        out.push_str(&format!("{:>5}  {}\n", idx, entry));
     }
     if out.ends_with('\n') {
         out.pop();
