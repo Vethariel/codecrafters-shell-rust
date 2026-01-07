@@ -1,5 +1,5 @@
+use std::collections::HashMap;
 use std::env;
-#[allow(unused_imports)]
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 
@@ -10,54 +10,115 @@ enum ArgPolicy {
 }
 
 struct CommandSpec {
-    name: String,
     arg_policy: ArgPolicy,
-    handler: fn(Vec<String>) -> Result<(), String>,
-    source: Option<String>,
+    handler: fn(&Shell, Vec<String>) -> Result<(), String>,
+}
+
+struct Shell {
+    builtins: HashMap<&'static str, CommandSpec>,
+    path_lookup: HashMap<String, String>,
 }
 
 fn main() {
+    let mut shell = Shell::new();
     loop {
-        repl();
+        match repl(&mut shell) {
+            Ok(true) => continue,
+            Ok(false) => break,
+            Err(err) => {
+                eprintln!("Error: {}", err);
+                break;
+            }
+        }
     }
 }
 
-fn repl() {
+fn repl(shell: &mut Shell) -> io::Result<bool> {
     print!("$ ");
-    io::stdout().flush().unwrap();
+    io::stdout().flush()?;
     let mut command = String::new();
-    io::stdin().read_line(&mut command).unwrap();
-    process_command(command.trim());
+    let bytes = io::stdin().read_line(&mut command)?;
+    if bytes == 0 {
+        return Ok(false);
+    }
+    process_command(shell, command.trim());
+    Ok(true)
 }
 
-fn process_command(input: &str) {
-    let parts: Vec<String> = input.split_whitespace().map(|s| s.to_string()).collect();
-    if parts.is_empty() {
-        return;
+impl Shell {
+    fn new() -> Self {
+        let mut builtins = HashMap::new();
+        builtins.insert(
+            "echo",
+            CommandSpec {
+                arg_policy: ArgPolicy::AtLeast(1),
+                handler: echo_command,
+            },
+        );
+        builtins.insert(
+            "exit",
+            CommandSpec {
+                arg_policy: ArgPolicy::None,
+                handler: exit_command,
+            },
+        );
+        builtins.insert(
+            "type",
+            CommandSpec {
+                arg_policy: ArgPolicy::Exact(1),
+                handler: type_command,
+            },
+        );
+        let path_lookup = load_path_commands();
+        Self {
+            builtins,
+            path_lookup,
+        }
     }
 
-    let command_name = parts[0].clone();
-    let args = parts[1..].to_vec();
+    fn find_builtin(&self, name: &str) -> Option<&CommandSpec> {
+        self.builtins.get(name)
+    }
 
-    let commands = get_commands();
-    match commands.iter().find(|cmd| cmd.name == command_name) {
-        Some(cmd) => match validate_args(&cmd.arg_policy, &args) {
+    fn external_path(&self, name: &str) -> Option<&String> {
+        self.path_lookup.get(name)
+    }
+}
+
+fn process_command(shell: &mut Shell, input: &str) {
+    let mut parts = input.split_whitespace();
+    let command_name = match parts.next() {
+        Some(name) => name,
+        None => return,
+    };
+    let args: Vec<String> = parts.map(|s| s.to_string()).collect();
+
+    if let Some(cmd) = shell.find_builtin(command_name) {
+        match validate_args(&cmd.arg_policy, &args) {
             Ok(_) => {
-                let mut args = args.clone();
-                if cmd.source != Some("builtin".to_string()) {
-                    args.insert(0, command_name.clone());
-                }
-                if let Err(err) = (cmd.handler)(args) {
+                if let Err(err) = (cmd.handler)(shell, args) {
                     eprintln!("Error: {}", err);
                 }
             }
             Err(err) => eprintln!("Argument Error: {}", err),
-        },
-        None => eprintln!("{}: command not found", command_name),
+        }
+        return;
     }
+
+    if shell.external_path(command_name).is_some() {
+        let mut exec_args = Vec::with_capacity(args.len() + 1);
+        exec_args.push(command_name.to_string());
+        exec_args.extend(args);
+        if let Err(err) = program_command(&exec_args) {
+            eprintln!("Error: {}", err);
+        }
+        return;
+    }
+
+    eprintln!("{}: command not found", command_name);
 }
 
-fn validate_args(policy: &ArgPolicy, args: &Vec<String>) -> Result<(), String> {
+fn validate_args(policy: &ArgPolicy, args: &[String]) -> Result<(), String> {
     match policy {
         ArgPolicy::None => {
             if !args.is_empty() {
@@ -83,37 +144,12 @@ fn validate_args(policy: &ArgPolicy, args: &Vec<String>) -> Result<(), String> {
     }
 }
 
-fn get_commands() -> Vec<CommandSpec> {
-    let mut commands = vec![
-        CommandSpec {
-            name: "echo".to_string(),
-            arg_policy: ArgPolicy::AtLeast(1),
-            handler: echo_command,
-            source: Some("builtin".to_string()),
-        },
-        CommandSpec {
-            name: "exit".to_string(),
-            arg_policy: ArgPolicy::None,
-            handler: exit_command,
-            source: Some("builtin".to_string()),
-        },
-        CommandSpec {
-            name: "type".to_string(),
-            arg_policy: ArgPolicy::Exact(1),
-            handler: type_command,
-            source: Some("builtin".to_string()),
-        },
-    ];
-    commands.extend(get_commands_path());
-    commands
-}
-
-fn get_commands_path() -> Vec<CommandSpec> {
+fn load_path_commands() -> HashMap<String, String> {
     let path_eval = env::var_os("PATH").unwrap_or_default();
     let paths: Vec<String> = env::split_paths(&path_eval)
         .filter_map(|p| p.to_str().map(|s| s.to_string()))
         .collect();
-    let mut commands = Vec::new();
+    let mut lookup = HashMap::new();
     for path in paths {
         let entries = std::fs::read_dir(&path);
         if !entries.is_ok() {
@@ -140,55 +176,40 @@ fn get_commands_path() -> Vec<CommandSpec> {
                 continue;
             }
             if let Some(name) = entry.file_name().to_str() {
-                commands.push(CommandSpec {
-                    name: name.to_string(),
-                    arg_policy: ArgPolicy::AtLeast(0),
-                    handler: program_command,
-                    source: Some(path.clone()),
-                });
+                if !lookup.contains_key(name) {
+                    lookup.insert(name.to_string(), path.clone());
+                }
             }
         }
     }
-    commands
+    lookup
 }
 
-fn echo_command(args: Vec<String>) -> Result<(), String> {
+fn echo_command(_shell: &Shell, args: Vec<String>) -> Result<(), String> {
     println!("{}", args.join(" "));
     Ok(())
 }
 
-fn exit_command(_args: Vec<String>) -> Result<(), String> {
+fn exit_command(_shell: &Shell, _args: Vec<String>) -> Result<(), String> {
     std::process::exit(0);
 }
 
-fn type_command(args: Vec<String>) -> Result<(), String> {
+fn type_command(shell: &Shell, args: Vec<String>) -> Result<(), String> {
     let command_name = args[0].clone();
-    let commands = get_commands();
-    match commands.iter().find(|cmd| cmd.name == command_name) {
-        Some(cmd) => {
-            match &cmd.source {
-                Some(source) => {
-                    if source == "builtin" {
-                        println!("{} is a shell builtin", command_name);
-                    } else {
-                        println!("{} is {}/{}", command_name, source, command_name);
-                    }
-                }
-                None => {
-                    println!("{}: found", command_name);
-                }
-            }
-            Ok(())
-        }
-        None => {
-            println!("{}: not found", command_name);
-            Ok(())
-        }
+    if shell.find_builtin(&command_name).is_some() {
+        println!("{} is a shell builtin", command_name);
+        return Ok(());
     }
+    if let Some(path) = shell.external_path(&command_name) {
+        println!("{} is {}/{}", command_name, path, command_name);
+        return Ok(());
+    }
+    println!("{}: not found", command_name);
+    Ok(())
 }
 
-fn program_command(args: Vec<String>) -> Result<(), String> {
-    std::process::Command::new(args[0].clone())
+fn program_command(args: &[String]) -> Result<(), String> {
+    std::process::Command::new(&args[0])
         .args(&args[1..])
         .status()
         .map_err(|e| format!("Failed to execute {}: {}", args[0], e))?;
