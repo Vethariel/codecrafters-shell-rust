@@ -887,6 +887,14 @@ fn history_command(shell: &Shell, args: Vec<String>) -> Result<String, String> {
         }
         return Ok(String::new());
     }
+    if args.len() == 2 && args[0] == "-w" {
+        let history = shell.history.borrow();
+        let mut contents = history.join("\n");
+        contents.push('\n');
+        std::fs::write(&args[1], contents)
+            .map_err(|e| format!("history: {}: {}", &args[1], e))?;
+        return Ok(String::new());
+    }
 
     if args.len() > 1 {
         return Err("This command takes at most one argument.".to_string());
