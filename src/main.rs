@@ -100,14 +100,11 @@ impl Shell {
 }
 
 fn process_command(shell: &mut Shell, input: &str) {
-    let mut parts: std::str::SplitWhitespace<'_> = input.split_whitespace();
-    let command_name: &str = match parts.next() {
-        Some(name) => name,
-        None => return,
-    };
-    let args: Vec<String> = parts.map(|s: &str| s.to_string()).collect();
+    let mut parts: Vec<String> = process_quotes(input);
+    let command_name: String = parts.remove(0);
+    let args: Vec<String> = parts.into_iter().collect();
 
-    if let Some(cmd) = shell.find_builtin(command_name) {
+    if let Some(cmd) = shell.find_builtin(&command_name) {
         match validate_args(&cmd.arg_policy, &args) {
             Ok(_) => {
                 if let Err(err) = (cmd.handler)(shell, args) {
@@ -119,7 +116,7 @@ fn process_command(shell: &mut Shell, input: &str) {
         return;
     }
 
-    if shell.external_path(command_name).is_some() {
+    if shell.external_path(&command_name).is_some() {
         let mut exec_args: Vec<String> = Vec::with_capacity(args.len() + 1);
         exec_args.push(command_name.to_string());
         exec_args.extend(args);
@@ -130,6 +127,42 @@ fn process_command(shell: &mut Shell, input: &str) {
     }
 
     eprintln!("{}: command not found", command_name);
+}
+
+fn process_quotes(input: &str) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    let mut current_part: String = String::new();
+    let mut double_quotes: bool = false;
+    let mut single_quotes: bool = false;
+    let mut backslash: bool = false;
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                double_quotes = !double_quotes;
+            }
+            '\'' => {
+                single_quotes = !single_quotes;
+            }
+            '\\' => {
+                backslash = !backslash;
+            }
+            ' ' if !double_quotes && !single_quotes => {
+                if !current_part.is_empty() {
+                    parts.push(current_part.clone());
+                    current_part.clear();
+                }
+            }
+            _ => {
+                current_part.push(c);
+            }
+        }
+    }
+    if !current_part.is_empty() {
+        parts.push(current_part);
+    }
+    parts
 }
 
 fn validate_args(policy: &ArgPolicy, args: &[String]) -> Result<(), String> {
