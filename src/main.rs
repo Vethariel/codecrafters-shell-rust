@@ -1,6 +1,7 @@
+use std::env;
 #[allow(unused_imports)]
 use std::io::{self, Write};
-use std::env;
+use std::os::unix::fs::PermissionsExt;
 
 enum ArgPolicy {
     None,
@@ -21,7 +22,7 @@ fn main() {
     }
 }
 
-fn repl(){
+fn repl() {
     print!("$ ");
     io::stdout().flush().unwrap();
     let mut command = String::new();
@@ -97,7 +98,7 @@ fn get_commands() -> Vec<CommandSpec> {
             arg_policy: ArgPolicy::Exact(1),
             handler: type_command,
             source: Some("builtin".to_string()),
-        }
+        },
     ];
     commands.extend(get_commands_path());
     commands
@@ -110,25 +111,41 @@ fn get_commands_path() -> Vec<CommandSpec> {
         .collect();
     let mut commands = Vec::new();
     for path in paths {
-        if let Ok(entries) = std::fs::read_dir(&path) {
-            for entry in entries.flatten() {
-                if let Ok(file_type) = entry.file_type() {
-                    if file_type.is_file() {
-                        if let Some(name) = entry.file_name().to_str() {
-                            commands.push(CommandSpec {
-                                name: name.to_string(),
-                                arg_policy: ArgPolicy::AtLeast(0),
-                                handler: program_command,
-                                source: Some(path.clone()),
-                            });
-                        }
-                    }
-                }
+        let entries = std::fs::read_dir(&path);
+        if !entries.is_ok() {
+            continue;
+        }
+        let entries = entries.unwrap();
+        for entry in entries.flatten() {
+            let file_type = entry.file_type();
+            if !file_type.is_ok() {
+                continue;
+            }
+            let file_type = file_type.unwrap();
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let metadata = entry.metadata();
+            if !metadata.is_ok() {
+                continue;
+            }
+            let metadata = metadata.unwrap();
+            let permissions = metadata.permissions();
+            if (permissions.mode() & 0o111) == 0 {
+                continue;
+            }
+            if let Some(name) = entry.file_name().to_str() {
+                commands.push(CommandSpec {
+                    name: name.to_string(),
+                    arg_policy: ArgPolicy::AtLeast(0),
+                    handler: program_command,
+                    source: Some(path.clone()),
+                });
             }
         }
     }
     commands
-
 }
 
 fn echo_command(args: &[&str]) -> Result<(), String> {
