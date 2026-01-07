@@ -192,6 +192,5 @@ fn program_command(args: Vec<String>) -> Result<(), String> {
         .args(&args[1..])
         .status()
         .map_err(|e| format!("Failed to execute {}: {}", args[0], e))?;
-    println!("Executing external program with args: {:?}", args);
     Ok(())
 }
