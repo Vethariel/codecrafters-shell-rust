@@ -76,6 +76,13 @@ impl Shell {
                 handler: pwd_command,
             },
         );
+        builtins.insert(
+            "cd",
+            CommandSpec {
+                arg_policy: ArgPolicy::Exact(1),
+                handler: cd_command,
+            },
+        );
         let path_lookup: HashMap<String, String> = load_path_commands();
         Self {
             builtins,
@@ -230,5 +237,23 @@ fn pwd_command(_shell: &Shell, _args: Vec<String>) -> Result<(), String> {
             Ok(())
         }
         Err(e) => Err(format!("pwd: {}", e)),
+    }
+}
+
+fn cd_command(_shell: &Shell, args: Vec<String>) -> Result<(), String> {
+    let target_dir = &args[0];
+    let path_type = std::fs::metadata(target_dir);
+    if path_type.is_err() {
+        println!("cd: {}: No such file or directory", target_dir);
+        return Ok(());
+    }
+    let path_type = path_type.unwrap();
+    if !path_type.is_dir() {
+        println!("cd: {}: Not a directory", target_dir);
+        return Ok(());
+    }
+    match env::set_current_dir(target_dir) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("cd: {}: {}", target_dir, e)),
     }
 }
