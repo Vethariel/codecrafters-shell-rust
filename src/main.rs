@@ -1,5 +1,6 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
+use std::env;
 
 enum ArgPolicy {
     None,
@@ -8,10 +9,10 @@ enum ArgPolicy {
 }
 
 struct CommandSpec {
-    name: &'static str,
+    name: String,
     arg_policy: ArgPolicy,
-    arg_usage: &'static str,
     handler: fn(&[&str]) -> Result<(), String>,
+    source: Option<String>,
 }
 
 fn main() {
@@ -78,26 +79,56 @@ fn validate_args(policy: &ArgPolicy, args: &[&str]) -> Result<(), String> {
 }
 
 fn get_commands() -> Vec<CommandSpec> {
-    vec![
+    let mut commands = vec![
         CommandSpec {
-            name: "echo",
+            name: "echo".to_string(),
             arg_policy: ArgPolicy::AtLeast(1),
-            arg_usage: "<message>",
             handler: echo_command,
+            source: Some("builtin".to_string()),
         },
         CommandSpec {
-            name: "exit",
+            name: "exit".to_string(),
             arg_policy: ArgPolicy::None,
-            arg_usage: "",
             handler: exit_command,
+            source: Some("builtin".to_string()),
         },
         CommandSpec {
-            name: "type",
+            name: "type".to_string(),
             arg_policy: ArgPolicy::Exact(1),
-            arg_usage: "<command>",
             handler: type_command,
+            source: Some("builtin".to_string()),
         }
-    ]
+    ];
+    commands.extend(get_commands_path());
+    commands
+}
+
+fn get_commands_path() -> Vec<CommandSpec> {
+    let path_eval = env::var_os("PATH").unwrap_or_default();
+    let paths: Vec<String> = env::split_paths(&path_eval)
+        .filter_map(|p| p.to_str().map(|s| s.to_string()))
+        .collect();
+    let mut commands = Vec::new();
+    for path in paths {
+        if let Ok(entries) = std::fs::read_dir(&path) {
+            for entry in entries.flatten() {
+                if let Ok(file_type) = entry.file_type() {
+                    if file_type.is_file() {
+                        if let Some(name) = entry.file_name().to_str() {
+                            commands.push(CommandSpec {
+                                name: name.to_string(),
+                                arg_policy: ArgPolicy::AtLeast(0),
+                                handler: program_command,
+                                source: Some(path.clone()),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    commands
+
 }
 
 fn echo_command(args: &[&str]) -> Result<(), String> {
@@ -114,7 +145,18 @@ fn type_command(args: &[&str]) -> Result<(), String> {
     let commands = get_commands();
     match commands.iter().find(|cmd| cmd.name == command_name) {
         Some(cmd) => {
-            println!("{} is a shell builtin", cmd.name);
+            match &cmd.source {
+                Some(source) => {
+                    if source == "builtin" {
+                        println!("{} is a shell builtin", command_name);
+                    } else {
+                        println!("{} is {}", command_name, source);
+                    }
+                }
+                None => {
+                    println!("{}: found", command_name);
+                }
+            }
             Ok(())
         }
         None => {
@@ -122,4 +164,9 @@ fn type_command(args: &[&str]) -> Result<(), String> {
             Ok(())
         }
     }
+}
+
+fn program_command(args: &[&str]) -> Result<(), String> {
+    println!("Executing external program with args: {:?}", args);
+    Ok(())
 }
