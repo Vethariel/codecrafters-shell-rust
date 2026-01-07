@@ -12,7 +12,7 @@ enum ArgPolicy {
 struct CommandSpec {
     name: String,
     arg_policy: ArgPolicy,
-    handler: fn(&[&str]) -> Result<(), String>,
+    handler: fn(Vec<String>) -> Result<(), String>,
     source: Option<String>,
 }
 
@@ -31,18 +31,25 @@ fn repl() {
 }
 
 fn process_command(input: &str) {
-    let parts: Vec<&str> = input.split_whitespace().collect();
+    let parts: Vec<String> = input.split_whitespace().map(|s| s.to_string()).collect();
     if parts.is_empty() {
         return;
     }
 
-    let command_name = parts[0];
-    let args = &parts[1..];
+    let command_name = parts[0].clone();
+    let args = parts[1..].to_vec();
 
     let commands = get_commands();
     match commands.iter().find(|cmd| cmd.name == command_name) {
-        Some(cmd) => match validate_args(&cmd.arg_policy, args) {
+        Some(cmd) => match validate_args(&cmd.arg_policy, &args) {
             Ok(_) => {
+                if cmd.source != Some("builtin".to_string()) {
+                    let mut args = args.clone();
+                    args.insert(
+                        0,
+                        format!("{}/{}", cmd.source.as_ref().unwrap(), command_name),
+                    );
+                }
                 if let Err(err) = (cmd.handler)(args) {
                     eprintln!("Error: {}", err);
                 }
@@ -53,7 +60,7 @@ fn process_command(input: &str) {
     }
 }
 
-fn validate_args(policy: &ArgPolicy, args: &[&str]) -> Result<(), String> {
+fn validate_args(policy: &ArgPolicy, args: &Vec<String>) -> Result<(), String> {
     match policy {
         ArgPolicy::None => {
             if !args.is_empty() {
@@ -148,17 +155,17 @@ fn get_commands_path() -> Vec<CommandSpec> {
     commands
 }
 
-fn echo_command(args: &[&str]) -> Result<(), String> {
+fn echo_command(args: Vec<String>) -> Result<(), String> {
     println!("{}", args.join(" "));
     Ok(())
 }
 
-fn exit_command(_args: &[&str]) -> Result<(), String> {
+fn exit_command(_args: Vec<String>) -> Result<(), String> {
     std::process::exit(0);
 }
 
-fn type_command(args: &[&str]) -> Result<(), String> {
-    let command_name = args[0];
+fn type_command(args: Vec<String>) -> Result<(), String> {
+    let command_name = args[0].clone();
     let commands = get_commands();
     match commands.iter().find(|cmd| cmd.name == command_name) {
         Some(cmd) => {
@@ -183,7 +190,11 @@ fn type_command(args: &[&str]) -> Result<(), String> {
     }
 }
 
-fn program_command(args: &[&str]) -> Result<(), String> {
+fn program_command(args: Vec<String>) -> Result<(), String> {
+    std::process::Command::new(args[0].clone())
+        .args(&args[1..])
+        .status()
+        .map_err(|e| format!("Failed to execute {}: {}", args[0], e))?;
     println!("Executing external program with args: {:?}", args);
     Ok(())
 }
