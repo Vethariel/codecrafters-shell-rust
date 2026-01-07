@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::process::Stdio;
 use rustyline::completion::{Completer, FilenameCompleter, Pair};
 use rustyline::config::{BellStyle, CompletionType, Config};
 use rustyline::error::ReadlineError;
@@ -177,6 +178,17 @@ fn process_command(shell: &mut Shell, input: &str) {
     if parts.is_empty() {
         return;
     }
+    if let Some(pipe_index) = parts.iter().position(|part| part == "|") {
+        let mut left_parts: Vec<String> = parts.drain(..pipe_index).collect();
+        parts.pop_front();
+        let right_parts: Vec<String> = parts.into_iter().collect();
+        if left_parts.is_empty() || right_parts.is_empty() {
+            eprintln!("Invalid pipeline");
+            return;
+        }
+        run_pipeline(shell, &mut left_parts, &right_parts);
+        return;
+    }
     let command_name: String = parts.pop_front().unwrap();
     let (args, std_type, std_file) = process_redirection(&mut parts);
 
@@ -205,6 +217,56 @@ fn process_command(shell: &mut Shell, input: &str) {
     eprintln!("{}: command not found", command_name);
 }
 
+fn run_pipeline(shell: &Shell, left_parts: &mut Vec<String>, right_parts: &[String]) {
+    let left_command = left_parts.remove(0);
+    let right_command = &right_parts[0];
+    if shell.external_path(&left_command).is_none() {
+        eprintln!("{}: command not found", left_command);
+        return;
+    }
+    if shell.external_path(right_command).is_none() {
+        eprintln!("{}: command not found", right_command);
+        return;
+    }
+    let mut left_proc = match std::process::Command::new(&left_command)
+        .args(left_parts)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+    {
+        Ok(proc) => proc,
+        Err(err) => {
+            eprintln!("Error: Failed to execute program: {}", err);
+            return;
+        }
+    };
+    let left_stdout = match left_proc.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            eprintln!("Error: Failed to capture stdout for pipeline");
+            return;
+        }
+    };
+    let mut right_proc = match std::process::Command::new(right_command)
+        .args(&right_parts[1..])
+        .stdin(Stdio::from(left_stdout))
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+    {
+        Ok(proc) => proc,
+        Err(err) => {
+            eprintln!("Error: Failed to execute program: {}", err);
+            return;
+        }
+    };
+    if let Err(err) = right_proc.wait() {
+        eprintln!("Error: {}", err);
+    }
+    let _ = left_proc.kill();
+    let _ = left_proc.wait();
+}
+
 fn process_quotes(input: &str) -> VecDeque<String> {
     let mut parts: VecDeque<String> = VecDeque::new();
     let mut current_part: String = String::new();
@@ -215,6 +277,18 @@ fn process_quotes(input: &str) -> VecDeque<String> {
 
     while let Some(c) = chars.next() {
         match c {
+            '|' if !double_quotes && !single_quotes => {
+                if backslash {
+                    current_part.push(c);
+                    backslash = false;
+                } else {
+                    if !current_part.is_empty() {
+                        parts.push_back(current_part.clone());
+                        current_part.clear();
+                    }
+                    parts.push_back("|".to_string());
+                }
+            }
             '"' => {
                 if backslash {
                     current_part.push(c);
