@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::io::{self, Read, Write};
@@ -30,6 +30,7 @@ struct Shell {
     builtins: HashMap<&'static str, CommandSpec>,
     path_lookup: HashMap<String, String>,
     history: RefCell<Vec<String>>,
+    history_saved: Cell<usize>,
 }
 
 fn main() {
@@ -174,6 +175,7 @@ impl Shell {
             builtins,
             path_lookup,
             history: RefCell::new(Vec::new()),
+            history_saved: Cell::new(0),
         }
     }
 
@@ -885,6 +887,8 @@ fn history_command(shell: &Shell, args: Vec<String>) -> Result<String, String> {
                 shell.history.borrow_mut().push(line.to_string());
             }
         }
+        let len = shell.history.borrow().len();
+        shell.history_saved.set(len);
         return Ok(String::new());
     }
     if args.len() == 2 && args[0] == "-w" {
@@ -893,6 +897,27 @@ fn history_command(shell: &Shell, args: Vec<String>) -> Result<String, String> {
         contents.push('\n');
         std::fs::write(&args[1], contents)
             .map_err(|e| format!("history: {}: {}", &args[1], e))?;
+        shell.history_saved.set(history.len());
+        return Ok(String::new());
+    }
+    if args.len() == 2 && args[0] == "-a" {
+        let history = shell.history.borrow();
+        let start = shell.history_saved.get().min(history.len());
+        let mut contents = String::new();
+        for entry in history.iter().skip(start) {
+            contents.push_str(entry);
+            contents.push('\n');
+        }
+        if !contents.is_empty() {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&args[1])
+                .map_err(|e| format!("history: {}: {}", &args[1], e))?;
+            file.write_all(contents.as_bytes())
+                .map_err(|e| format!("history: {}: {}", &args[1], e))?;
+        }
+        shell.history_saved.set(history.len());
         return Ok(String::new());
     }
 
