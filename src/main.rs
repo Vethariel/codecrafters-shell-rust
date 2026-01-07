@@ -70,8 +70,8 @@ impl Shell {
             },
         );
         builtins.insert(
-            "pwd", 
-            CommandSpec{
+            "pwd",
+            CommandSpec {
                 arg_policy: ArgPolicy::None,
                 handler: pwd_command,
             },
@@ -143,7 +143,11 @@ fn process_quotes(input: &str) -> Vec<String> {
                 double_quotes = !double_quotes;
             }
             '\'' => {
-                single_quotes = !single_quotes;
+                if !double_quotes {
+                    single_quotes = !single_quotes;
+                } else {
+                    current_part.push(c);
+                }
             }
             '\\' => {
                 backslash = !backslash;
