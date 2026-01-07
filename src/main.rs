@@ -150,7 +150,7 @@ fn type_command(args: &[&str]) -> Result<(), String> {
                     if source == "builtin" {
                         println!("{} is a shell builtin", command_name);
                     } else {
-                        println!("{} is {}", command_name, source);
+                        println!("{} is {}/{}", command_name, source, command_name);
                     }
                 }
                 None => {
