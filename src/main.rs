@@ -315,10 +315,10 @@ fn handle_redirection(result: Result<String, String>, std_type: &Option<String>,
     }
     match result {
         Ok(output) => {
-            if let Some(redir_type) = std_type {
-                let file_result = match redir_type.as_str() {
-                    "stdout_redirect" => std::fs::File::create(std_file),
-                    "stdout_append" => std::fs::OpenOptions::new()
+            if matches!(std_type.as_deref(), Some("stdout_redirect") | Some("stdout_append")) {
+                let file_result = match std_type.as_deref() {
+                    Some("stdout_redirect") => std::fs::File::create(std_file),
+                    Some("stdout_append") => std::fs::OpenOptions::new()
                         .create(true)
                         .append(true)
                         .open(std_file),
@@ -329,6 +329,22 @@ fn handle_redirection(result: Result<String, String>, std_type: &Option<String>,
                     let _ = file.flush();
                 } else {
                     eprintln!("Redirection Error: Could not open file {}", std_file);
+                }
+            } else if matches!(std_type.as_deref(), Some("stderr_redirect") | Some("stderr_append"))
+            {
+                let file_result = match std_type.as_deref() {
+                    Some("stderr_redirect") => std::fs::File::create(std_file),
+                    Some("stderr_append") => std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(std_file),
+                    _ => return,
+                };
+                if file_result.is_err() {
+                    eprintln!("Redirection Error: Could not open file {}", std_file);
+                }
+                if !output.is_empty() {
+                    println!("{}", output);
                 }
             } else if !output.is_empty() {
                 println!("{}", output);
