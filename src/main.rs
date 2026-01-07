@@ -2,6 +2,13 @@ use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
+use rustyline::completion::{Completer, FilenameCompleter, Pair};
+use rustyline::error::ReadlineError;
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
+use rustyline::history::DefaultHistory;
+use rustyline::validate::Validator;
+use rustyline::{Context, Editor, Helper};
 
 enum ArgPolicy {
     None,
@@ -21,8 +28,12 @@ struct Shell {
 
 fn main() {
     let mut shell: Shell = Shell::new();
+    let helper = ShellHelper::new(&shell);
+    let mut rl =
+        Editor::<ShellHelper, DefaultHistory>::new().expect("failed to initialize line editor");
+    rl.set_helper(Some(helper));
     loop {
-        match repl(&mut shell) {
+        match repl(&mut shell, &mut rl) {
             Ok(true) => continue,
             Ok(false) => break,
             Err(err) => {
@@ -33,16 +44,73 @@ fn main() {
     }
 }
 
-fn repl(shell: &mut Shell) -> io::Result<bool> {
-    print!("$ ");
-    io::stdout().flush()?;
-    let mut command: String = String::new();
-    let bytes: usize = io::stdin().read_line(&mut command)?;
-    if bytes == 0 {
-        return Ok(false);
+fn repl(shell: &mut Shell, rl: &mut Editor<ShellHelper, DefaultHistory>) -> io::Result<bool> {
+    match rl.readline("$ ") {
+        Ok(line) => {
+            if !line.trim().is_empty() {
+                let _ = rl.add_history_entry(line.as_str());
+            }
+            process_command(shell, line.trim());
+            Ok(true)
+        }
+        Err(ReadlineError::Interrupted) => Ok(true),
+        Err(ReadlineError::Eof) => Ok(false),
+        Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
     }
-    process_command(shell, command.trim());
-    Ok(true)
+}
+
+struct ShellHelper {
+    filename: FilenameCompleter,
+    commands: Vec<String>,
+}
+
+impl ShellHelper {
+    fn new(shell: &Shell) -> Self {
+        let mut commands: Vec<String> = shell.builtins.keys().map(|k| k.to_string()).collect();
+        commands.extend(shell.path_lookup.keys().cloned());
+        commands.sort();
+        commands.dedup();
+        Self {
+            filename: FilenameCompleter::new(),
+            commands,
+        }
+    }
+}
+
+impl Helper for ShellHelper {}
+impl Hinter for ShellHelper {
+    type Hint = String;
+}
+impl Highlighter for ShellHelper {}
+impl Validator for ShellHelper {}
+
+impl Completer for ShellHelper {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        ctx: &Context<'_>,
+    ) -> Result<(usize, Vec<Pair>), ReadlineError> {
+        let before_cursor = &line[..pos];
+        let last_space = before_cursor.rfind(|c: char| c.is_whitespace());
+        if last_space.is_none() {
+            let start = 0;
+            let prefix = before_cursor;
+            let matches: Vec<Pair> = self
+                .commands
+                .iter()
+                .filter(|cmd| cmd.starts_with(prefix))
+                .map(|cmd| Pair {
+                    display: cmd.clone(),
+                    replacement: format!("{} ", cmd),
+                })
+                .collect();
+            return Ok((start, matches));
+        }
+        self.filename.complete(line, pos, ctx)
+    }
 }
 
 impl Shell {
