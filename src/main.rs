@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::io::{self, Read, Write};
@@ -16,6 +17,7 @@ enum ArgPolicy {
     None,
     Exact(usize),
     OptionalOne,
+    Any,
     AtLeast(usize),
 }
 
@@ -27,7 +29,7 @@ struct CommandSpec {
 struct Shell {
     builtins: HashMap<&'static str, CommandSpec>,
     path_lookup: HashMap<String, String>,
-    history: Vec<String>,
+    history: RefCell<Vec<String>>,
 }
 
 fn main() {
@@ -56,7 +58,7 @@ fn repl(shell: &mut Shell, rl: &mut Editor<ShellHelper, DefaultHistory>) -> io::
     match rl.readline("$ ") {
         Ok(line) => {
             if !line.trim().is_empty() {
-                shell.history.push(line.to_string());
+                shell.history.borrow_mut().push(line.to_string());
                 let _ = rl.add_history_entry(line.as_str());
             }
             process_command(shell, line.trim());
@@ -163,7 +165,7 @@ impl Shell {
         builtins.insert(
             "history",
             CommandSpec {
-                arg_policy: ArgPolicy::OptionalOne,
+                arg_policy: ArgPolicy::Any,
                 handler: history_command,
             },
         );
@@ -171,7 +173,7 @@ impl Shell {
         Self {
             builtins,
             path_lookup,
-            history: Vec::new(),
+            history: RefCell::new(Vec::new()),
         }
     }
 
@@ -603,6 +605,7 @@ fn validate_args(policy: &ArgPolicy, args: &[String]) -> Result<(), String> {
                 Ok(())
             }
         }
+        ArgPolicy::Any => Ok(()),
         ArgPolicy::AtLeast(n) => {
             if args.len() < *n {
                 Err(format!("This command requires at least {} argument(s).", n))
@@ -874,9 +877,25 @@ fn cd_command(_shell: &Shell, args: Vec<String>) -> Result<String, String> {
 }
 
 fn history_command(shell: &Shell, args: Vec<String>) -> Result<String, String> {
+    if args.len() == 2 && args[0] == "-r" {
+        let contents = std::fs::read_to_string(&args[1])
+            .map_err(|e| format!("history: {}: {}", &args[1], e))?;
+        for line in contents.lines() {
+            if !line.is_empty() {
+                shell.history.borrow_mut().push(line.to_string());
+            }
+        }
+        return Ok(String::new());
+    }
+
+    if args.len() > 1 {
+        return Err("This command takes at most one argument.".to_string());
+    }
+
     let mut out = String::new();
+    let history = shell.history.borrow();
     let limit = if args.is_empty() {
-        shell.history.len()
+        history.len()
     } else {
         let raw = &args[0];
         match raw.parse::<usize>() {
@@ -884,9 +903,9 @@ fn history_command(shell: &Shell, args: Vec<String>) -> Result<String, String> {
             Err(_) => return Err(format!("history: {}: numeric argument required", raw)),
         }
     };
-    let total = shell.history.len();
+    let total = history.len();
     let start = total.saturating_sub(limit);
-    for (offset, entry) in shell.history.iter().skip(start).enumerate() {
+    for (offset, entry) in history.iter().skip(start).enumerate() {
         let idx = start + offset + 1;
         out.push_str(&format!("{:>5}  {}\n", idx, entry));
     }
