@@ -3,6 +3,7 @@ use std::env;
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use rustyline::completion::{Completer, FilenameCompleter, Pair};
+use rustyline::config::{BellStyle, CompletionType, Config};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
@@ -29,8 +30,12 @@ struct Shell {
 fn main() {
     let mut shell: Shell = Shell::new();
     let helper = ShellHelper::new(&shell);
-    let mut rl =
-        Editor::<ShellHelper, DefaultHistory>::new().expect("failed to initialize line editor");
+    let config = Config::builder()
+        .completion_type(CompletionType::List)
+        .bell_style(BellStyle::Audible)
+        .build();
+    let mut rl = Editor::<ShellHelper, DefaultHistory>::with_config(config)
+        .expect("failed to initialize line editor");
     rl.set_helper(Some(helper));
     loop {
         match repl(&mut shell, &mut rl) {
