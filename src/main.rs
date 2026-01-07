@@ -241,19 +241,26 @@ fn pwd_command(_shell: &Shell, _args: Vec<String>) -> Result<(), String> {
 }
 
 fn cd_command(_shell: &Shell, args: Vec<String>) -> Result<(), String> {
-    let target_dir = &args[0];
-    let path_type = std::fs::metadata(target_dir);
+    let mut target_dir = args[0].clone();
+    if target_dir == "~" {
+        if let Ok(home_dir) = env::var("HOME") {
+            target_dir = home_dir;
+        } else {
+            return Err("cd: HOME not set".to_string());
+        }
+    }
+    let path_type = std::fs::metadata(&target_dir);
     if path_type.is_err() {
-        println!("cd: {}: No such file or directory", target_dir);
+        println!("cd: {}: No such file or directory", &target_dir);
         return Ok(());
     }
     let path_type = path_type.unwrap();
     if !path_type.is_dir() {
-        println!("cd: {}: Not a directory", target_dir);
+        println!("cd: {}: Not a directory", &target_dir);
         return Ok(());
     }
-    match env::set_current_dir(target_dir) {
+    match env::set_current_dir(&target_dir) {
         Ok(_) => Ok(()),
-        Err(e) => Err(format!("cd: {}: {}", target_dir, e)),
+        Err(e) => Err(format!("cd: {}: {}", &target_dir, e)),
     }
 }
