@@ -45,10 +45,7 @@ fn process_command(input: &str) {
             Ok(_) => {
                 let mut args = args.clone();
                 if cmd.source != Some("builtin".to_string()) {
-                    args.insert(
-                        0,
-                        format!("{}/{}", cmd.source.as_ref().unwrap(), command_name),
-                    );
+                    args.insert(0, command_name.clone());
                 }
                 if let Err(err) = (cmd.handler)(args) {
                     eprintln!("Error: {}", err);
