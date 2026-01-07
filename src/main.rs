@@ -43,8 +43,8 @@ fn process_command(input: &str) {
     match commands.iter().find(|cmd| cmd.name == command_name) {
         Some(cmd) => match validate_args(&cmd.arg_policy, &args) {
             Ok(_) => {
+                let mut args = args.clone();
                 if cmd.source != Some("builtin".to_string()) {
-                    let mut args = args.clone();
                     args.insert(
                         0,
                         format!("{}/{}", cmd.source.as_ref().unwrap(), command_name),
