@@ -140,25 +140,48 @@ fn process_quotes(input: &str) -> Vec<String> {
     while let Some(c) = chars.next() {
         match c {
             '"' => {
-                double_quotes = !double_quotes;
+                if backslash {
+                    current_part.push(c);
+                    backslash = false;
+                } else if single_quotes {
+                    current_part.push(c);
+                } else {
+                    double_quotes = !double_quotes;
+                }
             }
             '\'' => {
-                if !double_quotes {
+                if backslash {
+                    current_part.push(c);
+                    backslash = false;
+                } else if !double_quotes {
                     single_quotes = !single_quotes;
                 } else {
                     current_part.push(c);
                 }
             }
             '\\' => {
-                backslash = !backslash;
+                if backslash {
+                    current_part.push(c);
+                    backslash = false;
+                } else if double_quotes || single_quotes {
+                    current_part.push(c);
+                } else {
+                    backslash = true;
+                }
             }
             ' ' if !double_quotes && !single_quotes => {
-                if !current_part.is_empty() {
+                if backslash {
+                    current_part.push(c);
+                    backslash = false;
+                } else if !current_part.is_empty() {
                     parts.push(current_part.clone());
                     current_part.clear();
                 }
             }
             _ => {
+                if backslash {
+                    backslash = false;
+                }
                 current_part.push(c);
             }
         }
